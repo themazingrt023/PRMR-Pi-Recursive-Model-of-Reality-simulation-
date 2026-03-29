@@ -1,0 +1,816 @@
+"""
+PRMR v0.2 — Pi Recursive Model of Reality
+==========================================
+Reece Tulloch, University of Portsmouth, March 2026
+
+Corrections from v0.1:
+  - Parameters now match Table 1 exactly (eta=0.10, omega_crit=0.20, a_crit=100)
+  - Recursion bound N_max implemented per Section 3.4
+  - Genealogy tree H built and tracked per formal state tuple definition
+  - Epoch parameter tau is a distinct monotonic field
+  - Generation index g used in fragmentation scaling
+  - Eternal return removed from core engine (not in paper);
+    moved to optional 'extended' mode with explicit flag
+  - Fitness monotonicity now correctly tracked over long windows
+  - Three domains supported: ABSTRACT (dimensionless), PHYSICAL (cosmological),
+    COGNITIVE (speculative, as flagged in paper Section 6)
+  - All parameter names match paper symbols exactly
+
+Formal state tuple per Definition 1:
+  S_n = (V_n, d_n, I_n, H_n, Phi_n, tau_n)
+"""
+
+import numpy as np
+import json
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional, Set
+from datetime import datetime
+from enum import Enum
+
+
+# =============================================================================
+# SECTION 1: DOMAIN DEFINITIONS
+# =============================================================================
+
+class Domain(Enum):
+    """
+    PRMR applies to any self-organising recursive system.
+    Domain controls unit labels and display only — the core
+    recursive operator is identical across all three.
+    """
+    ABSTRACT   = "abstract"    # Dimensionless (paper baseline)
+    PHYSICAL   = "physical"    # Cosmological (Mpc, Gyr, M_sun)
+    COGNITIVE  = "cognitive"   # Speculative (information units, cycles)
+
+
+DOMAIN_UNITS = {
+    Domain.ABSTRACT:  {"scale": "units",  "info": "bits",    "time": "cycles", "mass": "units"},
+    Domain.PHYSICAL:  {"scale": "Mpc",    "info": "bits",    "time": "Gyr",    "mass": "M_sun"},
+    Domain.COGNITIVE: {"scale": "modules","info": "bits",    "time": "steps",  "mass": "weight"},
+}
+
+
+# =============================================================================
+# SECTION 2: FORMAL STRUCTURES
+# =============================================================================
+
+@dataclass
+class Vortex:
+    """
+    Primitive structural unit of PRMR (Section 3.1).
+
+    Properties (paper symbols):
+      a     — spatial scale
+      omega — vorticity (structural coherence)
+      I     — information content
+      x     — position vector
+      v     — velocity vector
+      m     — effective mass (emergent from I and omega)
+      g     — generation index (recursion depth)
+    """
+    id: int
+    a: float            # spatial scale
+    omega: float        # vorticity
+    I: float            # information content
+    x: np.ndarray       # position
+    v: np.ndarray       # velocity
+    m: float = 0.0      # emergent mass
+    g: int = 0          # generation index
+    parent_id: int = -1 # for building H
+
+    def __post_init__(self):
+        self.x = np.array(self.x, dtype=float)
+        self.v = np.array(self.v, dtype=float)
+
+
+@dataclass
+class MergerRecord:
+    """One entry in the genealogy tree H."""
+    cycle: int
+    parent_ids: Tuple[int, int]
+    child_id: int
+    info_retained: float
+    generation: int
+
+
+class GenealogyTree:
+    """
+    H: hierarchical merger genealogy (Section 3.1).
+    Tracks the full lineage of every vortex across all cycles.
+    """
+    def __init__(self):
+        self.records: List[MergerRecord] = []
+        self.lineage: Dict[int, List[int]] = {}  # id -> ancestor ids
+
+    def record_merger(self, cycle: int, v1: Vortex, v2: Vortex,
+                      child: Vortex, info_retained: float):
+        rec = MergerRecord(
+            cycle=cycle,
+            parent_ids=(v1.id, v2.id),
+            child_id=child.id,
+            info_retained=info_retained,
+            generation=child.g
+        )
+        self.records.append(rec)
+
+        # Build lineage
+        ancestors = set()
+        for pid in [v1.id, v2.id]:
+            ancestors.add(pid)
+            ancestors.update(self.lineage.get(pid, []))
+        self.lineage[child.id] = list(ancestors)
+
+    def depth(self, vortex_id: int) -> int:
+        """Recursion depth of a vortex: how many merger generations deep."""
+        return len(self.lineage.get(vortex_id, []))
+
+    def summary(self) -> Dict:
+        return {
+            'total_mergers': len(self.records),
+            'max_depth': max((self.depth(r.child_id) for r in self.records), default=0),
+            'lineage_entries': len(self.lineage)
+        }
+
+    def to_list(self) -> List[Dict]:
+        return [
+            {
+                'cycle': r.cycle,
+                'parents': list(r.parent_ids),
+                'child': r.child_id,
+                'info_retained': r.info_retained,
+                'generation': r.generation
+            }
+            for r in self.records
+        ]
+
+
+@dataclass
+class EpochState:
+    """
+    S_n = (V_n, d_n, I_n, H_n, Phi_n, tau_n)
+    Formal epoch state per Definition 1 (Section 3.1).
+    """
+    tau: int                         # epoch parameter (monotonically increasing)
+    V: List[Vortex]                  # vortex set
+    H: GenealogyTree                 # genealogy tree (shared reference across epochs)
+    Phi: float = 0.0                 # fitness
+    I_total: float = 0.0             # total information
+    I_active: float = 0.0            # info in active vortices
+    hierarchy_ratio: float = 1.0     # scale hierarchy
+    correlation_length: float = 0.0  # spatial coherence
+    n_mergers: int = 0
+    n_fragmentations: int = 0
+    n_dissipated: int = 0
+
+    def to_dict(self) -> Dict:
+        return {
+            'tau': self.tau,
+            'n_vortices': len(self.V),
+            'I_total': float(self.I_total),
+            'I_active': float(self.I_active),
+            'Phi': float(self.Phi),
+            'hierarchy_ratio': float(self.hierarchy_ratio),
+            'correlation_length': float(self.correlation_length),
+            'n_mergers': self.n_mergers,
+            'n_fragmentations': self.n_fragmentations,
+            'n_dissipated': self.n_dissipated,
+            'genealogy': self.H.summary()
+        }
+
+
+# =============================================================================
+# SECTION 3: PRMR ENGINE — PAPER-EXACT PARAMETERS
+# =============================================================================
+
+class PRMREngine:
+    """
+    Core recursive engine implementing the three operators F, G, R
+    per Section 3.2, with parameters from Table 1.
+
+    Parameters (paper symbols → Table 1 baseline):
+      alpha       = 0.50   mass-information coupling
+      eta         = 0.10   per-cycle info loss (fragmentation)
+      beta        = 3.0    vorticity-driven fragmentation factor
+      a_crit      = 100.0  scale threshold triggering fragmentation
+      omega_crit  = 0.20   vorticity threshold for survival
+      rho         = 0.85   info retention during merger
+      G_eff       = 1.0    gravitational coupling (dimensionless)
+      gamma       = 0.02   velocity damping
+      d_merge     = 8.0    spatial proximity for merger
+      delta       = 0.25   scale growth for surviving vortices
+      mu          = 0.50   info gain rate during nucleation
+
+    Optional extended mode:
+      eternal_return  — if True, background entropy seeds new vortex
+                        after termination (not in paper, flagged explicitly)
+    """
+
+    # --- Table 1 baseline (paper-exact) ---
+    DEFAULT_PARAMS = dict(
+        alpha=0.50,
+        eta=0.10,
+        beta=3.0,
+        a_crit=100.0,
+        omega_crit=0.20,
+        rho=0.85,
+        G_eff=1.0,
+        gamma=0.02,
+        d_merge=8.0,
+        delta=0.25,
+        mu=0.50,
+    )
+
+    def __init__(self,
+                 domain: Domain = Domain.ABSTRACT,
+                 eternal_return: bool = False,
+                 eternal_seed_fraction: float = 0.20,
+                 eternal_min_info: float = 100.0,
+                 n_gravity_steps: int = 50,
+                 dt: float = 0.1,
+                 f_esc: float = 1.5,
+                 **param_overrides):
+
+        self.domain = domain
+        self.eternal_return = eternal_return
+        self.eternal_seed_fraction = eternal_seed_fraction
+        self.eternal_min_info = eternal_min_info
+        self.n_steps = n_gravity_steps
+        self.dt = dt
+        self.f_esc = f_esc
+
+        # Apply params (Table 1 defaults, then any overrides)
+        p = dict(self.DEFAULT_PARAMS)
+        p.update(param_overrides)
+        for k, v in p.items():
+            setattr(self, k, v)
+
+        # State
+        self.vortex_counter = 0
+        self.history: List[EpochState] = []
+        self.background_info: float = 0.0  # only used if eternal_return=True
+        self.rebirth_count: int = 0
+
+        # Recursion bound (Section 3.4)
+        # N_max = ln(I_0 / theta) / ln(1 / (1 - eta))
+        # Computed at first run() call once I_0 is known
+        self.N_max: Optional[int] = None
+        self.dissipation_threshold_fraction = 0.01  # theta = 1% of I_0
+
+    def compute_recursion_bound(self, I_0: float) -> int:
+        """
+        Section 3.4: maximum cycles before info falls below threshold.
+        N_max = ln(I_0 / theta) / ln(1 / (1 - eta))
+        """
+        theta = I_0 * self.dissipation_threshold_fraction
+        if theta <= 0 or self.eta >= 1.0:
+            return 999
+        N_max = np.log(I_0 / theta) / np.log(1.0 / (1.0 - self.eta))
+        return max(1, int(np.ceil(N_max)))
+
+    # -------------------------------------------------------------------------
+    # Emergent mass (Section 3.1)
+    # -------------------------------------------------------------------------
+    def emergent_mass(self, v: Vortex) -> float:
+        """m = I * (1 + alpha * omega)"""
+        v.m = v.I * (1.0 + self.alpha * v.omega)
+        return v.m
+
+    # -------------------------------------------------------------------------
+    # Fitness function Phi (Definition 2)
+    # -------------------------------------------------------------------------
+    def compute_fitness(self, state: EpochState) -> float:
+        """
+        Phi = I_total * hierarchy_ratio * ln(1 + correlation_length)
+        Definition 2, Section 3.3.
+        """
+        for v in state.V:
+            self.emergent_mass(v)
+
+        state.I_active = sum(v.I for v in state.V)
+        state.I_total = state.I_active + (self.background_info if self.eternal_return else 0.0)
+
+        if not state.V:
+            state.Phi = 0.0
+            return 0.0
+
+        scales = [v.a for v in state.V]
+        state.hierarchy_ratio = max(scales) / (np.mean(scales) + 1e-9)
+
+        masses = np.array([v.m for v in state.V])
+        positions = np.array([v.x for v in state.V])
+        total_mass = np.sum(masses)
+
+        if total_mass > 0:
+            centroid = np.average(positions, axis=0, weights=masses)
+            dists = np.linalg.norm(positions - centroid, axis=1)
+            state.correlation_length = float(np.average(dists, weights=masses))
+        else:
+            state.correlation_length = 0.0
+
+        state.Phi = (state.I_total *
+                     state.hierarchy_ratio *
+                     np.log1p(state.correlation_length))
+        return state.Phi
+
+    # -------------------------------------------------------------------------
+    # Operator F: Fragmentation
+    # -------------------------------------------------------------------------
+    def fragmentation(self, state: EpochState) -> EpochState:
+        """
+        F: vortices with a > a_crit split into k daughters.
+        k = clip(omega * beta, 2, k_max).
+        Generation index g increments in daughters (not in paper explicitly,
+        but consistent with g tracking recursion depth).
+        Info distributed with fractional loss eta.
+        """
+        new_V = []
+        n_frag = 0
+        info_lost = 0.0
+
+        for v in state.V:
+            if v.a > self.a_crit:
+                n_frag += 1
+                # k scales with omega AND generation — higher-gen vortices
+                # are more structured, fragment less aggressively
+                gen_damping = 1.0 / (1.0 + 0.1 * v.g)
+                k = max(2, min(int(v.omega * self.beta * gen_damping), 8))
+
+                info_children = v.I * (1.0 - self.eta)
+                info_per = info_children / k
+                lost = v.I * self.eta
+                info_lost += lost
+
+                if self.eternal_return:
+                    self.background_info += lost
+
+                vorticity_child = v.omega * np.random.uniform(0.8, 1.2)
+                angles = np.linspace(0, 2 * np.pi, k, endpoint=False)
+                radius = v.a * 0.05
+
+                for angle in angles:
+                    offset = radius * np.array([np.cos(angle), np.sin(angle)])
+                    child = Vortex(
+                        id=self.vortex_counter,
+                        a=(v.a / k) * np.random.uniform(0.85, 1.15),
+                        omega=vorticity_child,
+                        I=info_per,
+                        x=v.x + offset,
+                        v=np.zeros(2),
+                        g=v.g + 1,       # generation increments
+                        parent_id=v.id
+                    )
+                    self.vortex_counter += 1
+                    new_V.append(child)
+            else:
+                new_V.append(v)
+
+        next_state = EpochState(
+            tau=state.tau,
+            V=new_V,
+            H=state.H,
+            n_fragmentations=n_frag
+        )
+        return next_state
+
+    # -------------------------------------------------------------------------
+    # Operator G: Gravitational evolution
+    # -------------------------------------------------------------------------
+    def gravitational_evolution(self, state: EpochState) -> EpochState:
+        """
+        G: vectorised Newtonian-like gravity with velocity damping gamma.
+        Uses vectorised pairwise forces (O(n^2) but fast with numpy).
+        Force: F_ij = G_eff * m_i * m_j / (r_ij^2 + softening^2)
+        Damping: v *= (1 - gamma) per step.
+        """
+        vortices = state.V
+        if len(vortices) <= 1:
+            return state
+
+        for v in vortices:
+            self.emergent_mass(v)
+
+        pos = np.array([v.x for v in vortices])   # (n, 2)
+        vel = np.array([v.v for v in vortices])   # (n, 2)
+        masses = np.array([v.m for v in vortices]) # (n,)
+        softening = 0.5
+
+        for _ in range(self.n_steps):
+            # Vectorised pairwise differences: (n, n, 2)
+            diff = pos[:, None, :] - pos[None, :, :]          # r_i - r_j
+            r2 = np.sum(diff**2, axis=2) + softening**2       # (n, n)
+            r2[np.arange(len(vortices)), np.arange(len(vortices))] = np.inf
+            # Force magnitudes: F_ij = G * mi * mj / r^2, direction toward j
+            F_mag = self.G_eff * masses[None, :] / r2         # (n, n)
+            forces = -np.sum(F_mag[:, :, None] * diff, axis=1) # (n, 2)
+            acc = forces * masses[:, None] / (masses[:, None]**2 + 1e-9)
+            vel = vel * (1.0 - self.gamma) + acc * self.dt
+            pos = pos + vel * self.dt
+
+        for i, v in enumerate(vortices):
+            v.x = pos[i]
+            v.v = vel[i]
+
+        state.V = vortices
+        return state
+
+    # -------------------------------------------------------------------------
+    # Operator R: Nucleation and Merger
+    # -------------------------------------------------------------------------
+    def nucleation_and_merger(self, state: EpochState) -> EpochState:
+        """
+        R: two phases per Section 3.2.
+
+        Phase 1 — Nucleation:
+          vortices with omega < omega_crit are dissipated.
+          survivors gain scale (delta) and info (mu).
+
+        Phase 2 — Merger:
+          pairs within d_merge with rel_v < f_esc * v_escape merge.
+          merged vortex: mass-weighted position/velocity,
+          info = I1 + rho * I2, g = max(g1, g2) + 1.
+          merger recorded in H.
+        """
+        # --- Nucleation ---
+        survivors = []
+        n_dissipated = 0
+
+        for v in state.V:
+            if v.omega >= self.omega_crit:
+                v.a *= (1.0 + self.delta)
+                v.I += self.mu * v.omega * v.I
+                v.omega *= 0.95
+                survivors.append(v)
+            else:
+                if self.eternal_return:
+                    self.background_info += v.I
+                n_dissipated += 1
+
+        # Eternal return: seed from background if enabled and all dead
+        if self.eternal_return and len(survivors) == 0:
+            if self.background_info >= self.eternal_min_info:
+                seed_I = self.eternal_seed_fraction * self.background_info
+                self.background_info -= seed_I
+                seed = Vortex(
+                    id=self.vortex_counter,
+                    a=self.a_crit * 0.6,
+                    omega=self.omega_crit * 1.5,
+                    I=seed_I,
+                    x=np.zeros(2),
+                    v=np.zeros(2),
+                    g=0,
+                    parent_id=-2
+                )
+                self.vortex_counter += 1
+                survivors = [seed]
+                self.rebirth_count += 1
+
+        # --- Merger ---
+        survivors.sort(key=lambda v: v.m, reverse=True)
+        merged = []
+        used: Set[int] = set()
+        n_mergers = 0
+
+        for i, v1 in enumerate(survivors):
+            if i in used:
+                continue
+            merged_this = False
+            for j, v2 in enumerate(survivors[i+1:], start=i+1):
+                if j in used:
+                    continue
+                dist = np.linalg.norm(v1.x - v2.x)
+                if dist < self.d_merge:
+                    rel_v = np.linalg.norm(v1.v - v2.v)
+                    v_esc = np.sqrt(2.0 * self.G_eff * v1.m / (dist + 0.1))
+                    if rel_v < self.f_esc * v_esc:
+                        m_total = v1.m + v2.m
+                        child = Vortex(
+                            id=self.vortex_counter,
+                            a=v1.a + v2.a,
+                            omega=((v1.omega * v1.m + v2.omega * v2.m) / m_total),
+                            I=v1.I + self.rho * v2.I,
+                            x=((v1.x * v1.m + v2.x * v2.m) / m_total),
+                            v=((v1.v * v1.m + v2.v * v2.m) / m_total),
+                            m=m_total,
+                            g=max(v1.g, v2.g) + 1,
+                            parent_id=-1
+                        )
+                        self.vortex_counter += 1
+                        state.H.record_merger(
+                            state.tau, v1, v2, child,
+                            info_retained=child.I
+                        )
+                        merged.append(child)
+                        used.add(i)
+                        used.add(j)
+                        n_mergers += 1
+                        merged_this = True
+                        break
+            if not merged_this:
+                merged.append(v1)
+
+        next_state = EpochState(
+            tau=state.tau + 1,
+            V=merged,
+            H=state.H,
+            n_mergers=n_mergers,
+            n_dissipated=n_dissipated,
+            n_fragmentations=state.n_fragmentations
+        )
+        self.compute_fitness(next_state)
+        return next_state
+
+    # -------------------------------------------------------------------------
+    # Single PRMR cycle: S_n -> S_{n+1}
+    # -------------------------------------------------------------------------
+    def step(self, state: EpochState) -> EpochState:
+        """One recursive cycle: F then G then R."""
+        s1 = self.fragmentation(state)
+        s2 = self.gravitational_evolution(s1)
+        s3 = self.nucleation_and_merger(s2)
+        return s3
+
+    # -------------------------------------------------------------------------
+    # Run
+    # -------------------------------------------------------------------------
+    def run(self, initial_state: EpochState,
+            n_cycles: int = 100) -> List[EpochState]:
+        """
+        Run PRMR for up to n_cycles, respecting the recursion bound N_max.
+        Terminates early if:
+          (a) tau >= N_max (recursion bound reached), or
+          (b) all vortices dead and eternal_return=False (natural dissipation)
+        """
+        # Compute recursion bound from initial information
+        I_0 = sum(v.I for v in initial_state.V)
+        self.N_max = self.compute_recursion_bound(I_0)
+
+        self.compute_fitness(initial_state)
+        self.history = [initial_state]
+        current = initial_state
+
+        effective_max = min(n_cycles, self.N_max)
+
+        for i in range(effective_max):
+            current = self.step(current)
+            self.history.append(current)
+
+            all_dead = (len(current.V) == 0 and
+                        (not self.eternal_return or
+                         self.background_info < self.eternal_min_info))
+            if all_dead:
+                break
+
+        return self.history
+
+
+# =============================================================================
+# SECTION 4: MULTI-DOMAIN RUNNERS
+# =============================================================================
+
+def run_abstract(seed: int = 42) -> Tuple[PRMREngine, List[EpochState]]:
+    """
+    Abstract domain: dimensionless, paper-exact baseline parameters.
+    This is the canonical PRMR run.
+    """
+    np.random.seed(seed)
+    H = GenealogyTree()
+
+    initial = EpochState(
+        tau=0,
+        V=[Vortex(id=0, a=250.0, omega=2.5, I=1500.0,
+                  x=np.zeros(2), v=np.zeros(2), g=0)],
+        H=H
+    )
+
+    engine = PRMREngine(domain=Domain.ABSTRACT, eternal_return=False)
+    history = engine.run(initial, n_cycles=200)
+    return engine, history
+
+
+def run_physical(seed: int = 42) -> Tuple[PRMREngine, List[EpochState]]:
+    """
+    Physical domain: cosmological units.
+    Scaled to structure formation (Mpc, bits, M_sun).
+    Eternal return enabled as an explicit extension (flagged).
+    """
+    np.random.seed(seed)
+    H = GenealogyTree()
+
+    initial = EpochState(
+        tau=0,
+        V=[Vortex(id=0, a=2.5, omega=2.5, I=1.5e15,
+                  x=np.zeros(2), v=np.zeros(2), g=0)],
+        H=H
+    )
+
+    engine = PRMREngine(
+        domain=Domain.PHYSICAL,
+        eternal_return=True,   # explicitly flagged as extension
+        eternal_seed_fraction=0.20,
+        eternal_min_info=1e12,
+        a_crit=0.5,            # Mpc threshold
+        d_merge=0.3,           # Mpc merger radius
+        G_eff=43.0,
+        eta=0.10,
+        omega_crit=0.20,
+    )
+    history = engine.run(initial, n_cycles=100)
+    return engine, history
+
+
+def run_cognitive(seed: int = 42) -> Tuple[PRMREngine, List[EpochState]]:
+    """
+    Cognitive domain: speculative instance of PRMR (Section 6).
+
+    Interpretation:
+      - Vortices = cognitive modules / memory clusters
+      - scale a = integration breadth of a module
+      - omega = coherence / binding strength
+      - I = information content (bits)
+      - Fragmentation = attention splitting, memory decay
+      - Merger = concept binding, associative consolidation
+      - Fitness Phi = organised complexity of cognitive state
+
+    This is explicitly speculative — flagged as future work in paper.
+    """
+    np.random.seed(seed)
+    H = GenealogyTree()
+
+    # Multiple initial modules (unlike single primordial vortex in other domains)
+    vortices = []
+    for i in range(5):
+        vortices.append(Vortex(
+            id=i,
+            a=np.random.uniform(20, 80),
+            omega=np.random.uniform(0.3, 1.5),
+            I=np.random.uniform(500, 2000),
+            x=np.random.randn(2) * 5,
+            v=np.zeros(2),
+            g=0
+        ))
+
+    initial = EpochState(tau=0, V=vortices, H=GenealogyTree())
+
+    engine = PRMREngine(
+        domain=Domain.COGNITIVE,
+        eternal_return=False,
+        a_crit=60.0,
+        omega_crit=0.20,
+        d_merge=6.0,
+        eta=0.10,
+        delta=0.30,
+        mu=0.60,
+    )
+    history = engine.run(initial, n_cycles=200)
+    return engine, history
+
+
+# =============================================================================
+# SECTION 5: ANALYSIS AND OUTPUT
+# =============================================================================
+
+def analyse(engine: PRMREngine,
+            history: List[EpochState],
+            label: str = "PRMR") -> Dict:
+    """
+    Compute validation metrics and return structured results.
+    """
+    fitnesses = [s.Phi for s in history]
+    infos = [s.I_total for s in history]
+
+    # Fitness monotonicity (strict)
+    strict_mono = all(fitnesses[i] <= fitnesses[i+1]
+                      for i in range(len(fitnesses)-1))
+
+    # Fitness trend over long window (10-cycle rolling)
+    window = 10
+    trend_up = 0
+    trend_total = max(1, len(fitnesses) - window)
+    for i in range(trend_total):
+        if fitnesses[min(i+window, len(fitnesses)-1)] > fitnesses[i]:
+            trend_up += 1
+    long_trend_fraction = trend_up / trend_total
+
+    final = history[-1]
+    initial = history[0]
+
+    info_growth = (final.I_total / max(initial.I_total, 1e-9))
+    terminated_naturally = (final.tau >= engine.N_max and not engine.eternal_return)
+
+    results = {
+        'domain': engine.domain.value,
+        'N_max': engine.N_max,
+        'cycles_run': len(history) - 1,
+        'terminated_naturally': terminated_naturally,
+        'eternal_return_enabled': engine.eternal_return,
+        'rebirth_count': engine.rebirth_count,
+        'final_vortices': len(final.V),
+        'info_growth_factor': float(info_growth),
+        'fitness_strict_monotone': strict_mono,
+        'fitness_long_trend_fraction': float(long_trend_fraction),
+        'peak_fitness': float(max(fitnesses)),
+        'final_fitness': float(fitnesses[-1]),
+        'genealogy': final.H.summary(),
+        'max_generation': max((v.g for s in history for v in s.V), default=0),
+        'trajectory': [s.to_dict() for s in history],
+    }
+    return results
+
+
+def print_report(results: Dict, label: str):
+    units = DOMAIN_UNITS[Domain(results['domain'])]
+    print(f"\n{'='*70}")
+    print(f"  PRMR — {label.upper()} DOMAIN")
+    print(f"{'='*70}")
+    print(f"  Recursion bound N_max       : {results['N_max']} cycles")
+    print(f"  Cycles run                  : {results['cycles_run']}")
+    print(f"  Natural termination         : {results['terminated_naturally']}")
+    print(f"  Eternal return (extension)  : {results['eternal_return_enabled']}")
+    if results['eternal_return_enabled']:
+        print(f"  Rebirth events              : {results['rebirth_count']}")
+    print(f"  Final vortex count          : {results['final_vortices']}")
+    print(f"  Information growth          : {results['info_growth_factor']:.1f}x")
+    print(f"  Max vortex generation       : {results['max_generation']}")
+    print(f"\n  Fitness (Phi):")
+    print(f"    Peak                      : {results['peak_fitness']:.3e}")
+    print(f"    Final                     : {results['final_fitness']:.3e}")
+    print(f"    Strict monotone           : {results['fitness_strict_monotone']}")
+    print(f"    Long-window uptrend       : {results['fitness_long_trend_fraction']:.0%}")
+    print(f"\n  Genealogy tree H:")
+    g = results['genealogy']
+    print(f"    Total mergers recorded    : {g['total_mergers']}")
+    print(f"    Max merger depth          : {g['max_depth']}")
+    print(f"\n  Trajectory (sample):")
+    traj = results['trajectory']
+    step = max(1, len(traj) // 8)
+    print(f"  {'tau':>4}  {'N':>4}  {'I_total':>12}  {'Phi':>12}  {'mergers':>7}  {'H.depth':>7}")
+    print(f"  {'-'*60}")
+    for s in traj[::step]:
+        print(f"  {s['tau']:>4}  {s['n_vortices']:>4}  "
+              f"{s['I_total']:>12.3e}  {s['Phi']:>12.3e}  "
+              f"{s['n_mergers']:>7}  {s['genealogy']['max_depth']:>7}")
+
+
+# =============================================================================
+# SECTION 6: MAIN
+# =============================================================================
+
+if __name__ == "__main__":
+    print("PRMR v0.2 — Pi Recursive Model of Reality")
+    print("Reece Tulloch, University of Portsmouth, 2026")
+    print("Parameters: Table 1 baseline (eta=0.10, omega_crit=0.20, a_crit=100)")
+
+    all_results = {}
+
+    # 1. Abstract (canonical paper run)
+    engine_a, hist_a = run_abstract(seed=42)
+    res_a = analyse(engine_a, hist_a, "abstract")
+    print_report(res_a, "abstract")
+    all_results['abstract'] = {k: v for k, v in res_a.items() if k != 'trajectory'}
+
+    # 2. Physical (cosmological extension)
+    engine_p, hist_p = run_physical(seed=42)
+    res_p = analyse(engine_p, hist_p, "physical")
+    print_report(res_p, "physical (cosmological extension)")
+    all_results['physical'] = {k: v for k, v in res_p.items() if k != 'trajectory'}
+
+    # 3. Cognitive (speculative)
+    engine_c, hist_c = run_cognitive(seed=42)
+    res_c = analyse(engine_c, hist_c, "cognitive")
+    print_report(res_c, "cognitive (speculative)")
+    all_results['cognitive'] = {k: v for k, v in res_c.items() if k != 'trajectory'}
+
+    # Save full results
+    output = {
+        'metadata': {
+            'version': '0.2',
+            'timestamp': datetime.now().isoformat(),
+            'author': 'Reece Tulloch',
+            'institution': 'University of Portsmouth',
+            'paper': 'PRMR: Pi Recursive Model of Reality',
+            'note': 'Parameters match Table 1. Eternal return is an optional extension, not in paper baseline.'
+        },
+        'domains': all_results,
+        'trajectories': {
+            'abstract': res_a['trajectory'][::2],
+            'physical': res_p['trajectory'][::2],
+            'cognitive': res_c['trajectory'][::2],
+        }
+    }
+
+    with open('/home/claude/prmr_v02_results.json', 'w') as f:
+        json.dump(output, f, indent=2)
+
+    print(f"\n{'='*70}")
+    print("  CROSS-DOMAIN SUMMARY")
+    print(f"{'='*70}")
+    for domain, res in all_results.items():
+        print(f"  {domain:12s}  N_max={res['N_max']:>4}  "
+              f"Phi_trend={res['fitness_long_trend_fraction']:.0%}  "
+              f"mergers={res['genealogy']['total_mergers']:>4}  "
+              f"max_gen={res['max_generation']:>3}")
+
+    print("\nResults saved: prmr_v02_results.json")
+    print("\nNote on eternal return: enabled in physical domain as an explicit")
+    print("extension beyond the paper's finite recursion model. Section 6 of")
+    print("the paper should formalise this if it is to be retained.")
