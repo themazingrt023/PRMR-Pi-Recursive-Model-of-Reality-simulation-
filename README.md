@@ -12,10 +12,12 @@ Interaction (gravitational-like dynamics)
 Nucleation and merger
 
 Key Concepts
-Vortices — primitive structural units
-Information (I) — evolving quantity across states
-Genealogy (H) — tracks structural lineage
-Fitness (Φ) — measures organised complexity
+
+
+Vortices primitive structural units
+Information (I)  evolving quantity across states
+Genealogy (H)  tracks structural lineage
+Fitness (Φ)  measures organised complexity
 
 Domains
 Abstract (baseline)
