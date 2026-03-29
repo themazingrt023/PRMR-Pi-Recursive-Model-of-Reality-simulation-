@@ -1,0 +1,101 @@
+Usage / Running the Simulation
+Requirements
+
+Python 3.10 or higher (3.11 recommended)
+
+Required package:
+pip install numpy
+Running the Model
+Clone the repository:
+git clone https://github.com/yourusername/prmr-framework.git
+cd prmr-framework
+
+Run the main simulation:
+python prmr.py
+
+What Happens When You Run It
+
+The simulation executes the PRMR model across three domains:
+
+Abstract — baseline, dimensionless system
+Physical — cosmological interpretation (Mpc / Gyr)
+Cognitive — speculative system (modules / steps)
+
+Each run simulates recursive evolution over multiple cycles.
+
+Simulation Process
+
+At each cycle, the system applies three operators:
+
+Fragmentation
+Structures exceeding a critical scale split into smaller units.
+Interaction (Gravitational-like)
+Structures influence each other based on position and emergent mass.
+Nucleation and Merger
+Structures either dissipate, grow, or merge into larger structures.
+Output
+
+After execution, the model produces:
+
+Console Output
+
+Displays key metrics such as:
+
+Recursion bound (N_max)
+Information growth
+Fitness (Φ)
+Vortex count
+Merger statistics
+Results File
+prmr_v01_results.json
+
+This file contains:
+
+Full state trajectory across all epochs
+Information and fitness evolution
+Genealogy (merger history)
+Domain-specific results
+Key Metrics Explained
+N_max
+Maximum number of recursive cycles before termination
+Information (I)
+Tracks how system content evolves over time
+Fitness (Φ)
+Measures organised complexity:
+higher values → more structured systems
+Vortex Count
+Indicates system expansion and structural complexity
+Genealogy Tree (H)
+Tracks lineage of structures through mergers
+Reproducibility
+
+The simulation uses a fixed random seed:
+
+seed = 42
+
+This ensures consistent and reproducible results across runs.
+
+Customising Parameters
+
+Key parameters can be modified in the code:
+
+eta = 0.10          # information loss rate
+a_crit = 100.0      # fragmentation threshold
+omega_crit = 0.20   # survival threshold
+d_merge = 8.0       # merge distance
+
+Changing these values allows exploration of:
+
+growth vs collapse behaviour
+stability regimes
+structural emergence patterns
+
+
+Notes
+This version (v0.01) is a conceptual computational framework
+The model is not yet physically validated
+Parameters are chosen to demonstrate behaviour, not to represent real-world systems
+Future versions will refine:
+information definition
+interaction rules
+theoretical grounding
